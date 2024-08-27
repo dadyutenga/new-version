@@ -328,63 +328,6 @@ def main():
 
             st.divider()
 
-            # Image Upload
-            if model in ["gpt-4o", "gpt-4-turbo", "gemini-1.5-flash", "gemini-1.5-pro", "claude-3-5-sonnet-20240620"]:
-                    
-                st.write(f"### **🖼️ Add an image{' or a video file' if model_type=='google' else ''}:**")
-
-                def add_image_to_messages():
-                    if st.session_state.uploaded_img or ("camera_img" in st.session_state and st.session_state.camera_img):
-                        img_type = st.session_state.uploaded_img.type if st.session_state.uploaded_img else "image/jpeg"
-                        if img_type == "video/mp4":
-                            # save the video file
-                            video_id = random.randint(100000, 999999)
-                            with open(f"video_{video_id}.mp4", "wb") as f:
-                                f.write(st.session_state.uploaded_img.read())
-                            st.session_state.messages.append(
-                                {
-                                    "role": "user", 
-                                    "content": [{
-                                        "type": "video_file",
-                                        "video_file": f"video_{video_id}.mp4",
-                                    }]
-                                }
-                            )
-                        else:
-                            raw_img = Image.open(st.session_state.uploaded_img or st.session_state.camera_img)
-                            img = get_image_base64(raw_img)
-                            st.session_state.messages.append(
-                                {
-                                    "role": "user", 
-                                    "content": [{
-                                        "type": "image_url",
-                                        "image_url": {"url": f"data:{img_type};base64,{img}"}
-                                    }]
-                                }
-                            )
-
-                cols_img = st.columns(2)
-
-                with cols_img[0]:
-                    with st.popover("📁 Upload"):
-                        st.file_uploader(
-                            f"Upload an image{' or a video' if model_type == 'google' else ''}:", 
-                            type=["png", "jpg", "jpeg"] + (["mp4"] if model_type == "google" else []), 
-                            accept_multiple_files=False,
-                            key="uploaded_img",
-                            on_change=add_image_to_messages,
-                        )
-
-                with cols_img[1]:                    
-                    with st.popover("📸 Camera"):
-                        activate_camera = st.checkbox("Activate camera")
-                        if activate_camera:
-                            st.camera_input(
-                                "Take a picture", 
-                                key="camera_img",
-                                on_change=add_image_to_messages,
-                            )
-
             # File Upload
             st.write("### **📄 Add a file:**")
             
@@ -455,31 +398,7 @@ def main():
             
 
             st.divider()
-            st.write("### **💾 Save/Load Conversation:**")
             
-            # Save conversation
-            conversation_name = st.text_input("Enter a name for this conversation:")
-            if st.button("Save Conversation"):
-                if conversation_name:
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    filename = f"conversation_{conversation_name}_{timestamp}.json"
-                    save_conversation(st.session_state.messages, filename)
-                    st.session_state.conversations[conversation_name] = filename
-                    st.success(f"Conversation saved as {filename}")
-                else:
-                    st.warning("Please enter a name for the conversation.")
-
-            # Load conversation
-            if st.session_state.conversations:
-                selected_conversation = st.selectbox("Select a conversation to load:", 
-                                                     list(st.session_state.conversations.keys()))
-                if st.button("Load Conversation"):
-                    filename = st.session_state.conversations[selected_conversation]
-                    st.session_state.messages = load_conversation(filename)
-                    st.success(f"Loaded conversation: {selected_conversation}")
-            else:
-                st.info("No saved conversations available.")
-
             # Reset conversation
             if st.button("Start New Conversation"):
                 st.session_state.messages = []
