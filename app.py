@@ -13,6 +13,7 @@ import mimetypes
 import json
 import os
 from datetime import datetime
+import base64
 
 dotenv.load_dotenv()
 
@@ -334,22 +335,15 @@ def main():
             def add_file_to_messages():
                 if st.session_state.uploaded_file:
                     file = st.session_state.uploaded_file
-                    file_content = ""
                     mime_type, _ = mimetypes.guess_type(file.name)
                     
-                    if mime_type == "application/pdf":
-                        pdf_reader = PdfReader(io.BytesIO(file.getvalue()))
-                        for page in pdf_reader.pages:
-                            file_content += page.extract_text() + "\n"
-                    elif mime_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-                        doc = Document(io.BytesIO(file.getvalue()))
-                        for para in doc.paragraphs:
-                            file_content += para.text + "\n"
-                    else:
-                        try:
-                            file_content = file.getvalue().decode("utf-8")
-                        except UnicodeDecodeError:
-                            file_content = "Binary file content (not displayed)"
+                    try:
+                        # Try to decode as text
+                        file_content = file.getvalue().decode("utf-8")
+                    except UnicodeDecodeError:
+                        # If decoding fails, encode as base64
+                        file_content = base64.b64encode(file.getvalue()).decode('utf-8')
+                        mime_type = "application/octet-stream"  # Generic binary data
                     
                     st.session_state.messages.append(
                         {
@@ -365,7 +359,7 @@ def main():
 
             st.file_uploader(
                 "Upload a file:", 
-                type=["txt", "pdf", "docx"],  # Limit to these file types
+                type=None,  # Allow all file types
                 accept_multiple_files=False,
                 key="uploaded_file",
                 on_change=add_file_to_messages,
