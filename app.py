@@ -14,7 +14,7 @@ import json
 import os
 from datetime import datetime
 import io
-from docx import Document
+
 from PyPDF2 import PdfReader
 
 dotenv.load_dotenv()
