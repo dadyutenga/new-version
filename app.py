@@ -138,13 +138,32 @@ def stream_llm_response(model_params, model_type="openai", api_key=None):
         )
         gemini_messages = messages_to_gemini(st.session_state.messages)
 
-        for chunk in model.generate_content(
-            contents=gemini_messages,
-            stream=True,
-        ):
-            chunk_text = chunk.text or ""
-            response_message += chunk_text
-            yield chunk_text
+        try:
+            response = model.generate_content(contents=gemini_messages, stream=False)
+            
+            if response.candidates:
+                for candidate in response.candidates:
+                    if candidate.content and candidate.content.parts:
+                        for part in candidate.content.parts:
+                            if part.text:
+                                response_message += part.text
+                                yield part.text
+                    else:
+                        st.warning("Response candidate does not contain any content.")
+            else:
+                st.warning("No valid response candidates received from the API.")
+            
+            if response.prompt_feedback:
+                st.info(f"Prompt feedback: {response.prompt_feedback}")
+            
+            if not response_message:
+                safety_ratings = response.candidates[0].safety_ratings if response.candidates else []
+                st.warning(f"The response may have been blocked due to safety concerns. Safety ratings: {safety_ratings}")
+                yield "The response was blocked due to safety concerns. Please try rephrasing your query."
+
+        except Exception as e:
+            st.error(f"Error in Google API: {str(e)}")
+            yield f"Error: {str(e)}"
 
     elif model_type == "anthropic":
         client = anthropic.Anthropic(api_key=api_key)
