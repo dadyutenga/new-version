@@ -13,9 +13,6 @@ import mimetypes
 import json
 import os
 from datetime import datetime
-import io
-
-from PyPDF2 import PdfReader
 
 dotenv.load_dotenv()
 
@@ -141,32 +138,13 @@ def stream_llm_response(model_params, model_type="openai", api_key=None):
         )
         gemini_messages = messages_to_gemini(st.session_state.messages)
 
-        try:
-            response = model.generate_content(contents=gemini_messages, stream=False)
-            
-            if response.candidates:
-                for candidate in response.candidates:
-                    if candidate.content and candidate.content.parts:
-                        for part in candidate.content.parts:
-                            if part.text:
-                                response_message += part.text
-                                yield part.text
-                    else:
-                        st.warning("Response candidate does not contain any content.")
-            else:
-                st.warning("No valid response candidates received from the API.")
-            
-            if response.prompt_feedback:
-                st.info(f"Prompt feedback: {response.prompt_feedback}")
-            
-            if not response_message:
-                safety_ratings = response.candidates[0].safety_ratings if response.candidates else []
-                st.warning(f"The response may have been blocked due to safety concerns. Safety ratings: {safety_ratings}")
-                yield "The response was blocked due to safety concerns. Please try rephrasing your query."
-
-        except Exception as e:
-            st.error(f"Error in Google API: {str(e)}")
-            yield f"Error: {str(e)}"
+        for chunk in model.generate_content(
+            contents=gemini_messages,
+            stream=True,
+        ):
+            chunk_text = chunk.text or ""
+            response_message += chunk_text
+            yield chunk_text
 
     elif model_type == "anthropic":
         client = anthropic.Anthropic(api_key=api_key)
@@ -330,6 +308,63 @@ def main():
             )
 
             st.divider()
+            
+            # Restore the image upload section
+            if model in ["gpt-4o", "gpt-4-turbo", "gemini-1.5-flash", "gemini-1.5-pro", "claude-3-5-sonnet-20240620"]:
+                    
+                st.write(f"### **🖼️ Add an image{' or a video file' if model_type=='google' else ''}:**")
+
+                def add_image_to_messages():
+                    if st.session_state.uploaded_img or ("camera_img" in st.session_state and st.session_state.camera_img):
+                        img_type = st.session_state.uploaded_img.type if st.session_state.uploaded_img else "image/jpeg"
+                        if img_type == "video/mp4":
+                            # save the video file
+                            video_id = random.randint(100000, 999999)
+                            with open(f"video_{video_id}.mp4", "wb") as f:
+                                f.write(st.session_state.uploaded_img.read())
+                            st.session_state.messages.append(
+                                {
+                                    "role": "user", 
+                                    "content": [{
+                                        "type": "video_file",
+                                        "video_file": f"video_{video_id}.mp4",
+                                    }]
+                                }
+                            )
+                        else:
+                            raw_img = Image.open(st.session_state.uploaded_img or st.session_state.camera_img)
+                            img = get_image_base64(raw_img)
+                            st.session_state.messages.append(
+                                {
+                                    "role": "user", 
+                                    "content": [{
+                                        "type": "image_url",
+                                        "image_url": {"url": f"data:{img_type};base64,{img}"}
+                                    }]
+                                }
+                            )
+
+                cols_img = st.columns(2)
+
+                with cols_img[0]:
+                    with st.popover("📁 Upload"):
+                        st.file_uploader(
+                            f"Upload an image{' or a video' if model_type == 'google' else ''}:", 
+                            type=["png", "jpg", "jpeg"] + (["mp4"] if model_type == "google" else []), 
+                            accept_multiple_files=False,
+                            key="uploaded_img",
+                            on_change=add_image_to_messages,
+                        )
+
+                with cols_img[1]:                    
+                    with st.popover("📸 Camera"):
+                        activate_camera = st.checkbox("Activate camera")
+                        if activate_camera:
+                            st.camera_input(
+                                "Take a picture", 
+                                key="camera_img",
+                                on_change=add_image_to_messages,
+                            )
 
             # File Upload
             st.write("### **📄 Add a file:**")
@@ -337,22 +372,8 @@ def main():
             def add_file_to_messages():
                 if st.session_state.uploaded_file:
                     file = st.session_state.uploaded_file
-                    file_content = ""
+                    file_content = file.getvalue().decode("utf-8")
                     mime_type, _ = mimetypes.guess_type(file.name)
-                    
-                    if mime_type == "application/pdf":
-                        pdf_reader = PdfReader(io.BytesIO(file.getvalue()))
-                        for page in pdf_reader.pages:
-                            file_content += page.extract_text() + "\n"
-                    elif mime_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-                        doc = Document(io.BytesIO(file.getvalue()))
-                        for para in doc.paragraphs:
-                            file_content += para.text + "\n"
-                    else:
-                        try:
-                            file_content = file.getvalue().decode("utf-8")
-                        except UnicodeDecodeError:
-                            file_content = "Binary file content (not displayed)"
                     
                     st.session_state.messages.append(
                         {
@@ -360,7 +381,7 @@ def main():
                             "content": [{
                                 "type": "file",
                                 "file_name": file.name,
-                                "file_type": mime_type or "application/octet-stream",
+                                "file_type": mime_type or "text/plain",
                                 "file_content": file_content
                             }]
                         }
@@ -368,7 +389,7 @@ def main():
 
             st.file_uploader(
                 "Upload a file:", 
-                type=["txt", "pdf", "docx"],  # Limit to these file types
+                type=None,  # Allow all file types
                 accept_multiple_files=False,
                 key="uploaded_file",
                 on_change=add_file_to_messages,
@@ -416,6 +437,32 @@ def main():
 
             st.divider()
             
+            # Restore the conversation saving/loading section
+            st.write("### **💾 Save/Load Conversation:**")
+            
+            # Save conversation
+            conversation_name = st.text_input("Enter a name for this conversation:")
+            if st.button("Save Conversation"):
+                if conversation_name:
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    filename = f"conversation_{conversation_name}_{timestamp}.json"
+                    save_conversation(st.session_state.messages, filename)
+                    st.session_state.conversations[conversation_name] = filename
+                    st.success(f"Conversation saved as {filename}")
+                else:
+                    st.warning("Please enter a name for the conversation.")
+
+            # Load conversation
+            if st.session_state.conversations:
+                selected_conversation = st.selectbox("Select a conversation to load:", 
+                                                     list(st.session_state.conversations.keys()))
+                if st.button("Load Conversation"):
+                    filename = st.session_state.conversations[selected_conversation]
+                    st.session_state.messages = load_conversation(filename)
+                    st.success(f"Loaded conversation: {selected_conversation}")
+            else:
+                st.info("No saved conversations available.")
+
             # Reset conversation
             if st.button("Start New Conversation"):
                 st.session_state.messages = []
