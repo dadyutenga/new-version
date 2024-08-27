@@ -13,6 +13,9 @@ import mimetypes
 import json
 import os
 from datetime import datetime
+import io
+from docx import Document
+from PyPDF2 import PdfReader
 
 dotenv.load_dotenv()
 
@@ -334,8 +337,22 @@ def main():
             def add_file_to_messages():
                 if st.session_state.uploaded_file:
                     file = st.session_state.uploaded_file
-                    file_content = file.getvalue().decode("utf-8")
+                    file_content = ""
                     mime_type, _ = mimetypes.guess_type(file.name)
+                    
+                    if mime_type == "application/pdf":
+                        pdf_reader = PdfReader(io.BytesIO(file.getvalue()))
+                        for page in pdf_reader.pages:
+                            file_content += page.extract_text() + "\n"
+                    elif mime_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+                        doc = Document(io.BytesIO(file.getvalue()))
+                        for para in doc.paragraphs:
+                            file_content += para.text + "\n"
+                    else:
+                        try:
+                            file_content = file.getvalue().decode("utf-8")
+                        except UnicodeDecodeError:
+                            file_content = "Binary file content (not displayed)"
                     
                     st.session_state.messages.append(
                         {
@@ -343,7 +360,7 @@ def main():
                             "content": [{
                                 "type": "file",
                                 "file_name": file.name,
-                                "file_type": mime_type or "text/plain",
+                                "file_type": mime_type or "application/octet-stream",
                                 "file_content": file_content
                             }]
                         }
@@ -351,7 +368,7 @@ def main():
 
             st.file_uploader(
                 "Upload a file:", 
-                type=None,  # Allow all file types
+                type=["txt", "pdf", "docx"],  # Limit to these file types
                 accept_multiple_files=False,
                 key="uploaded_file",
                 on_change=add_file_to_messages,
