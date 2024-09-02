@@ -14,6 +14,7 @@ import json
 import os
 from datetime import datetime
 import base64
+from mistralai import Mistral
 
 dotenv.load_dotenv()
 
@@ -33,6 +34,13 @@ openai_models = [
     "gpt-3.5-turbo-16k", 
     "gpt-4", 
     "gpt-4-32k",
+]
+
+mistral_models = [
+    "codestral-latest",
+    "mistral-large-latest",
+    "mistral-medium-latest",
+    "mistral-small-latest",
 ]
 
 
@@ -178,6 +186,38 @@ def stream_llm_response(model_params, model_type="openai", api_key=None):
                 response_message += text
                 yield text
 
+    elif model_type == "mistral":
+        client = Mistral(api_key=api_key)
+        
+        if model_params["model"] == "codestral-latest":
+            # Use FIM for Codestral model
+            last_message = st.session_state.messages[-1]["content"][0]["text"]
+            prompt = last_message.split('\n')[0]  # Use the first line as the prompt
+            suffix = "\n".join(last_message.split('\n')[1:])  # Use the rest as the suffix
+            
+            response = client.fim.complete(
+                model=model_params["model"],
+                prompt=prompt,
+                suffix=suffix,
+                temperature=model_params["temperature"] if "temperature" in model_params else 0.3,
+                top_p=1,
+            )
+            
+            response_message = response.choices[0].message.content
+            yield response_message
+        else:
+            # Use chat completion for other Mistral models
+            messages = [{"role": m["role"], "content": m["content"][0]["text"]} for m in st.session_state.messages]
+            
+            response = client.chat(
+                model=model_params["model"],
+                messages=messages,
+                temperature=model_params["temperature"] if "temperature" in model_params else 0.3,
+            )
+            
+            response_message = response.choices[0].message.content
+            yield response_message
+
     st.session_state.messages.append({
         "role": "assistant", 
         "content": [
@@ -256,9 +296,13 @@ def main():
         with st.popover("🔐 Anthropic"):
             anthropic_api_key = st.text_input("Introduce your Anthropic API Key (https://console.anthropic.com/)", value=default_anthropic_api_key, type="password")
     
+        default_mistral_api_key = os.getenv("MISTRAL_API_KEY") if os.getenv("MISTRAL_API_KEY") is not None else ""
+        with st.popover("🔐 Mistral AI"):
+            mistral_api_key = st.text_input("Introduce your Mistral AI API Key", value=default_mistral_api_key, type="password")
+    
     # --- Main Content ---
     # Checking if the user has introduced the OpenAI API Key, if not, a warning is displayed
-    if (openai_api_key == "" or openai_api_key is None or "sk-" not in openai_api_key) and (google_api_key == "" or google_api_key is None) and (anthropic_api_key == "" or anthropic_api_key is None):
+    if (openai_api_key == "" or openai_api_key is None or "sk-" not in openai_api_key) and (google_api_key == "" or google_api_key is None) and (anthropic_api_key == "" or anthropic_api_key is None) and (mistral_api_key == "" or mistral_api_key is None):
         st.write("#")
         st.warning("⬅️ Please introduce an API Key to continue...")
 
@@ -295,12 +339,13 @@ def main():
 
             st.divider()
             
-            available_models = [] + (anthropic_models if anthropic_api_key else []) + (google_models if google_api_key else []) + (openai_models if openai_api_key else [])
+            available_models = [] + (anthropic_models if anthropic_api_key else []) + (google_models if google_api_key else []) + (openai_models if openai_api_key else []) + (mistral_models if mistral_api_key else [])
             model = st.selectbox("Select a model:", available_models, index=0)
             model_type = None
             if model.startswith("gpt"): model_type = "openai"
             elif model.startswith("gemini"): model_type = "google"
             elif model.startswith("claude"): model_type = "anthropic"
+            elif model.startswith("mistral"): model_type = "mistral"
             
             with st.popover("⚙️ Model parameters"):
                 model_temp = st.slider("Temperature", min_value=0.0, max_value=2.0, value=0.3, step=0.1)
@@ -439,6 +484,7 @@ def main():
                     "openai": openai_api_key,
                     "google": google_api_key,
                     "anthropic": anthropic_api_key,
+                    "mistral": mistral_api_key,
                 }
                 st.write_stream(
                     stream_llm_response(
@@ -467,3 +513,4 @@ def main():
 
 if __name__=="__main__":
     main()
+    
