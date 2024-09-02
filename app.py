@@ -10,11 +10,6 @@ import google.generativeai as genai
 import random
 import anthropic
 import mimetypes
-import json
-import os
-from datetime import datetime
-import base64
-from mistralai import Mistral
 
 dotenv.load_dotenv()
 
@@ -34,13 +29,6 @@ openai_models = [
     "gpt-3.5-turbo-16k", 
     "gpt-4", 
     "gpt-4-32k",
-]
-
-mistral_models = [
-    "codestral-latest",
-    "mistral-large-latest",
-    "mistral-medium-latest",
-    "mistral-small-latest",
 ]
 
 
@@ -147,32 +135,13 @@ def stream_llm_response(model_params, model_type="openai", api_key=None):
         )
         gemini_messages = messages_to_gemini(st.session_state.messages)
 
-        try:
-            response = model.generate_content(contents=gemini_messages, stream=False)
-            
-            if response.candidates:
-                for candidate in response.candidates:
-                    if candidate.content and candidate.content.parts:
-                        for part in candidate.content.parts:
-                            if part.text:
-                                response_message += part.text
-                                yield part.text
-                    else:
-                        st.warning("Response candidate does not contain any content.")
-            else:
-                st.warning("No valid response candidates received from the API.")
-            
-            if response.prompt_feedback:
-                st.info(f"Prompt feedback: {response.prompt_feedback}")
-            
-            if not response_message:
-                safety_ratings = response.candidates[0].safety_ratings if response.candidates else []
-                st.warning(f"The response may have been blocked due to safety concerns. Safety ratings: {safety_ratings}")
-                yield "The response was blocked due to safety concerns. Please try rephrasing your query."
-
-        except Exception as e:
-            st.error(f"Error in Google API: {str(e)}")
-            yield f"Error: {str(e)}"
+        for chunk in model.generate_content(
+            contents=gemini_messages,
+            stream=True,
+        ):
+            chunk_text = chunk.text or ""
+            response_message += chunk_text
+            yield chunk_text
 
     elif model_type == "anthropic":
         client = anthropic.Anthropic(api_key=api_key)
@@ -185,38 +154,6 @@ def stream_llm_response(model_params, model_type="openai", api_key=None):
             for text in stream.text_stream:
                 response_message += text
                 yield text
-
-    elif model_type == "mistral":
-        client = Mistral(api_key=api_key)
-        
-        if model_params["model"] == "codestral-latest":
-            # Use FIM for Codestral model
-            last_message = st.session_state.messages[-1]["content"][0]["text"]
-            prompt = last_message.split('\n')[0]  # Use the first line as the prompt
-            suffix = "\n".join(last_message.split('\n')[1:])  # Use the rest as the suffix
-            
-            response = client.fim.complete(
-                model=model_params["model"],
-                prompt=prompt,
-                suffix=suffix,
-                temperature=model_params["temperature"] if "temperature" in model_params else 0.3,
-                top_p=1,
-            )
-            
-            response_message = response.choices[0].message.content
-            yield response_message
-        else:
-            # Use chat completion for other Mistral models
-            messages = [{"role": m["role"], "content": m["content"][0]["text"]} for m in st.session_state.messages]
-            
-            response = client.chat(
-                model=model_params["model"],
-                messages=messages,
-                temperature=model_params["temperature"] if "temperature" in model_params else 0.3,
-            )
-            
-            response_message = response.choices[0].message.content
-            yield response_message
 
     st.session_state.messages.append({
         "role": "assistant", 
@@ -246,25 +183,7 @@ def base64_to_image(base64_string):
     
     return Image.open(BytesIO(base64.b64decode(base64_string)))
 
-def save_conversation(messages, filename):
-    # Ensure the 'conversations' directory exists
-    os.makedirs('conversations', exist_ok=True)
-    filepath = os.path.join('conversations', filename)
-    with open(filepath, 'w') as f:
-        json.dump(messages, f)
 
-def load_conversation(filename):
-    filepath = os.path.join('conversations', filename)
-    if os.path.exists(filepath):
-        with open(filepath, 'r') as f:
-            return json.load(f)
-    return []
-
-def load_conversation(filename):
-    if os.path.exists(filename):
-        with open(filename, 'r') as f:
-            return json.load(f)
-    return []
 
 def main():
 
@@ -296,13 +215,9 @@ def main():
         with st.popover("🔐 Anthropic"):
             anthropic_api_key = st.text_input("Introduce your Anthropic API Key (https://console.anthropic.com/)", value=default_anthropic_api_key, type="password")
     
-        default_mistral_api_key = os.getenv("MISTRAL_API_KEY") if os.getenv("MISTRAL_API_KEY") is not None else ""
-        with st.popover("🔐 Mistral AI"):
-            mistral_api_key = st.text_input("Introduce your Mistral AI API Key", value=default_mistral_api_key, type="password")
-    
     # --- Main Content ---
     # Checking if the user has introduced the OpenAI API Key, if not, a warning is displayed
-    if (openai_api_key == "" or openai_api_key is None or "sk-" not in openai_api_key) and (google_api_key == "" or google_api_key is None) and (anthropic_api_key == "" or anthropic_api_key is None) and (mistral_api_key == "" or mistral_api_key is None):
+    if (openai_api_key == "" or openai_api_key is None or "sk-" not in openai_api_key) and (google_api_key == "" or google_api_key is None) and (anthropic_api_key == "" or anthropic_api_key is None):
         st.write("#")
         st.warning("⬅️ Please introduce an API Key to continue...")
 
@@ -313,9 +228,6 @@ def main():
 
         if "messages" not in st.session_state:
             st.session_state.messages = []
-
-        if "conversations" not in st.session_state:
-            st.session_state.conversations = {}
 
         # Displaying the previous messages if there are any
         for message in st.session_state.messages:
@@ -339,13 +251,12 @@ def main():
 
             st.divider()
             
-            available_models = [] + (anthropic_models if anthropic_api_key else []) + (google_models if google_api_key else []) + (openai_models if openai_api_key else []) + (mistral_models if mistral_api_key else [])
+            available_models = [] + (anthropic_models if anthropic_api_key else []) + (google_models if google_api_key else []) + (openai_models if openai_api_key else [])
             model = st.selectbox("Select a model:", available_models, index=0)
             model_type = None
             if model.startswith("gpt"): model_type = "openai"
             elif model.startswith("gemini"): model_type = "google"
             elif model.startswith("claude"): model_type = "anthropic"
-            elif model.startswith("mistral"): model_type = "mistral"
             
             with st.popover("⚙️ Model parameters"):
                 model_temp = st.slider("Temperature", min_value=0.0, max_value=2.0, value=0.3, step=0.1)
@@ -373,22 +284,72 @@ def main():
             )
 
             st.divider()
-            
+
+            # Image Upload
+            if model in ["gpt-4o", "gpt-4-turbo", "gemini-1.5-flash", "gemini-1.5-pro", "claude-3-5-sonnet-20240620"]:
+                    
+                st.write(f"### **🖼️ Add an image{' or a video file' if model_type=='google' else ''}:**")
+
+                def add_image_to_messages():
+                    if st.session_state.uploaded_img or ("camera_img" in st.session_state and st.session_state.camera_img):
+                        img_type = st.session_state.uploaded_img.type if st.session_state.uploaded_img else "image/jpeg"
+                        if img_type == "video/mp4":
+                            # save the video file
+                            video_id = random.randint(100000, 999999)
+                            with open(f"video_{video_id}.mp4", "wb") as f:
+                                f.write(st.session_state.uploaded_img.read())
+                            st.session_state.messages.append(
+                                {
+                                    "role": "user", 
+                                    "content": [{
+                                        "type": "video_file",
+                                        "video_file": f"video_{video_id}.mp4",
+                                    }]
+                                }
+                            )
+                        else:
+                            raw_img = Image.open(st.session_state.uploaded_img or st.session_state.camera_img)
+                            img = get_image_base64(raw_img)
+                            st.session_state.messages.append(
+                                {
+                                    "role": "user", 
+                                    "content": [{
+                                        "type": "image_url",
+                                        "image_url": {"url": f"data:{img_type};base64,{img}"}
+                                    }]
+                                }
+                            )
+
+                cols_img = st.columns(2)
+
+                with cols_img[0]:
+                    with st.popover("📁 Upload"):
+                        st.file_uploader(
+                            f"Upload an image{' or a video' if model_type == 'google' else ''}:", 
+                            type=["png", "jpg", "jpeg"] + (["mp4"] if model_type == "google" else []), 
+                            accept_multiple_files=False,
+                            key="uploaded_img",
+                            on_change=add_image_to_messages,
+                        )
+
+                with cols_img[1]:                    
+                    with st.popover("📸 Camera"):
+                        activate_camera = st.checkbox("Activate camera")
+                        if activate_camera:
+                            st.camera_input(
+                                "Take a picture", 
+                                key="camera_img",
+                                on_change=add_image_to_messages,
+                            )
+
             # File Upload
             st.write("### **📄 Add a file:**")
             
             def add_file_to_messages():
                 if st.session_state.uploaded_file:
                     file = st.session_state.uploaded_file
+                    file_content = file.getvalue().decode("utf-8")
                     mime_type, _ = mimetypes.guess_type(file.name)
-                    
-                    try:
-                        # Try to decode as text
-                        file_content = file.getvalue().decode("utf-8")
-                    except UnicodeDecodeError:
-                        # If decoding fails, encode as base64
-                        file_content = base64.b64encode(file.getvalue()).decode('utf-8')
-                        mime_type = "application/octet-stream"  # Generic binary data
                     
                     st.session_state.messages.append(
                         {
@@ -396,7 +357,7 @@ def main():
                             "content": [{
                                 "type": "file",
                                 "file_name": file.name,
-                                "file_type": mime_type or "application/octet-stream",
+                                "file_type": mime_type or "text/plain",
                                 "file_content": file_content
                             }]
                         }
@@ -450,13 +411,6 @@ def main():
 
             
 
-            st.divider()
-            
-            # Reset conversation
-            if st.button("Start New Conversation"):
-                st.session_state.messages = []
-                st.success("Started a new conversation.")
-
         # Chat input
         if prompt := st.chat_input("Hi! Ask me anything...") or audio_prompt or audio_file_added:
             if not audio_file_added:
@@ -484,7 +438,6 @@ def main():
                     "openai": openai_api_key,
                     "google": google_api_key,
                     "anthropic": anthropic_api_key,
-                    "mistral": mistral_api_key,
                 }
                 st.write_stream(
                     stream_llm_response(
@@ -513,4 +466,3 @@ def main():
 
 if __name__=="__main__":
     main()
-    
